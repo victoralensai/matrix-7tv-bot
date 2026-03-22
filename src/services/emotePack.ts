@@ -28,7 +28,7 @@ export interface RoomPackDescriptor {
 }
 
 const ROOM_EMOTES_EVENT = "im.ponies.room_emotes";
-const ROOM_PARENT_EVENT = "m.room.parent";
+const ROOM_PARENT_EVENT = "m.space.parent";
 
 interface RoomStateEvent {
   type?: string;
