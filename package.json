@@ -1,0 +1,34 @@
+{
+  "name": "matrix-7tv-bot",
+  "version": "1.0.0",
+  "description": "Matrix bot for adding 7TV emotes to room/personal emote packs",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "watch": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "matrix",
+    "7tv",
+    "emotes",
+    "bot"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "matrix-bot-sdk": "^0.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
+  }
+}

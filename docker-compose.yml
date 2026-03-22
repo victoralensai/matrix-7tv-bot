@@ -1,0 +1,12 @@
+services:
+  matrix-7tv-bot:
+    build: .
+    container_name: matrix-7tv-bot
+    restart: unless-stopped
+    environment:
+      - MATRIX_HOMESERVER_URL=${MATRIX_HOMESERVER_URL}
+      - MATRIX_ACCESS_TOKEN=${MATRIX_ACCESS_TOKEN}
+      - MATRIX_BOT_USER_ID=${MATRIX_BOT_USER_ID}
+      - DATA_PATH=/app/data
+    volumes:
+      - ./data:/app/data
