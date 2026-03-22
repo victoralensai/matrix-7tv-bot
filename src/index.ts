@@ -4,7 +4,7 @@ import { LogService } from "matrix-bot-sdk";
 import * as fs from "fs";
 import { PackChoice, PackScope, SelectionManager } from "./session/selectionManager";
 import { isValidEmoteName, parseAddEmoteCommand } from "./commands/addEmote";
-import { getHelpMessage } from "./commands/help";
+import { getHelpHtmlMessage, getHelpMessage } from "./commands/help";
 import { SevenTvService } from "./services/sevenTv";
 import { EmotePackService } from "./services/emotePack";
 import { MediaUploadService } from "./services/mediaUpload";
@@ -17,6 +17,79 @@ interface PackSelectionOption {
   action:
     | { kind: "existing"; packChoiceIndex: number }
     | { kind: "create"; scope: PackScope; roomId: string; roomDisplayName: string };
+}
+
+interface FormattedMessage {
+  plain: string;
+  html: string;
+}
+
+function textMessage(text: string): FormattedMessage {
+  return { plain: text, html: escapeHtml(text) };
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function getThreadRootEventId(event: any): string | null {
+  const relatesTo = event?.content?.["m.relates_to"];
+  if (!relatesTo || relatesTo.rel_type !== "m.thread" || typeof relatesTo.event_id !== "string") {
+    return null;
+  }
+
+  return relatesTo.event_id;
+}
+
+async function sendThreadText(
+  client: BotClient,
+  roomId: string,
+  threadRootEventId: string,
+  userId: string,
+  message: FormattedMessage,
+  mentionUser = false
+): Promise<string> {
+  const mentionText = mentionUser ? `${userId} ` : "";
+  const mentionHtml = mentionUser
+    ? `<a href=\"https://matrix.to/#/${encodeURIComponent(userId)}\">${escapeHtml(userId)}</a> `
+    : "";
+
+  return client.sendMessage(roomId, {
+    msgtype: "m.text",
+    body: `${mentionText}${message.plain}`,
+    format: "org.matrix.custom.html",
+    formatted_body: `${mentionHtml}${message.html}`,
+    "m.relates_to": {
+      rel_type: "m.thread",
+      event_id: threadRootEventId,
+    },
+  });
+}
+
+async function sendThreadImage(
+  client: BotClient,
+  roomId: string,
+  threadRootEventId: string,
+  body: string,
+  mxcUrl: string
+): Promise<string> {
+  return client.sendMessage(roomId, {
+    msgtype: "m.image",
+    body,
+    url: mxcUrl,
+    info: {
+      mimetype: "image/webp",
+    },
+    "m.relates_to": {
+      rel_type: "m.thread",
+      event_id: threadRootEventId,
+    },
+  });
 }
 
 async function main() {
@@ -47,32 +120,68 @@ async function main() {
   client.on("room.message", async (roomId: string, event: any) => {
     if (event.sender === config.botUserId) return;
     if (event.content?.msgtype !== "m.text") return;
+    if (typeof event.event_id !== "string" || event.event_id.length === 0) return;
 
     const body: string = event.content.body || "";
     const trimmed = body.trim();
     const userId: string = event.sender;
+    const threadRootEventId = getThreadRootEventId(event);
 
     if (trimmed === "/help" || trimmed === "/7tv-help") {
-      await client.sendText(roomId, getHelpMessage());
+      await sendThreadText(
+        client,
+        roomId,
+        event.event_id,
+        userId,
+        {
+          plain: getHelpMessage(),
+          html: getHelpHtmlMessage(),
+        },
+        true
+      );
       return;
     }
 
     if (trimmed === "/cancel") {
       const cancelled = selectionManager.clearSession(userId, roomId);
-      await client.sendText(
+      await sendThreadText(
+        client,
         roomId,
-        cancelled ? "Selection cancelled." : "No active selection to cancel."
+        threadRootEventId || event.event_id,
+        userId,
+        textMessage(cancelled ? "Selection cancelled." : "No active selection to cancel."),
+        true
       );
       return;
     }
 
     if (trimmed === "/add-emote") {
-      await client.sendText(roomId, "Usage: /add-emote <search query>");
+      await sendThreadText(
+        client,
+        roomId,
+        event.event_id,
+        userId,
+        {
+          plain: "Usage: /add-emote <search query>",
+          html: "<b>Usage:</b> <code>/add-emote &lt;search query&gt;</code>",
+        },
+        true
+      );
       return;
     }
 
     if (trimmed === "/add-emote-by-link") {
-      await client.sendText(roomId, "Usage: /add-emote-by-link <7tv emote URL or ID>");
+      await sendThreadText(
+        client,
+        roomId,
+        event.event_id,
+        userId,
+        {
+          plain: "Usage: /add-emote-by-link <7tv emote URL or ID>",
+          html: "<b>Usage:</b> <code>/add-emote-by-link &lt;7tv emote URL or ID&gt;</code>",
+        },
+        true
+      );
       return;
     }
 
@@ -89,15 +198,36 @@ async function main() {
           },
         ];
 
-        selectionManager.startEmoteSelection(userId, roomId, addEmoteByLinkCommand.originalLink, emoteCandidates, {
-          preselectedEmoteIndex: 0,
-        });
+        selectionManager.startEmoteSelection(
+          userId,
+          roomId,
+          event.event_id,
+          addEmoteByLinkCommand.originalLink,
+          emoteCandidates,
+          {
+            preselectedEmoteIndex: 0,
+          }
+        );
 
-        await sendDirectSelectionPreview(client, mediaUploadService, roomId, emoteCandidates[0]);
+        await sendDirectSelectionPreview(
+          client,
+          mediaUploadService,
+          roomId,
+          event.event_id,
+          userId,
+          emoteCandidates[0]
+        );
         await promptForPackSelection(client, selectionManager, emotePackService, botUserId, userId, roomId);
       } catch (error) {
         LogService.error("7tv", "Fetch by link failed", error);
-        await client.sendText(roomId, getAddEmoteErrorMessage(error));
+        await sendThreadText(
+          client,
+          roomId,
+          event.event_id,
+          userId,
+          textMessage(getAddEmoteErrorMessage(error)),
+          true
+        );
       }
       return;
     }
@@ -109,12 +239,29 @@ async function main() {
         results = await sevenTv.searchEmotes(addEmoteCommand.query, 5);
       } catch (error) {
         LogService.error("7tv", "Search failed", error);
-        await client.sendText(roomId, "7TV search failed. Please try again later.");
+        await sendThreadText(
+          client,
+          roomId,
+          event.event_id,
+          userId,
+          textMessage("7TV search failed. Please try again later."),
+          true
+        );
         return;
       }
 
       if (results.length === 0) {
-        await client.sendText(roomId, `No 7TV emotes found for "${addEmoteCommand.query}".`);
+        await sendThreadText(
+          client,
+          roomId,
+          event.event_id,
+          userId,
+          {
+            plain: `No 7TV emotes found for "${addEmoteCommand.query}".`,
+            html: `No 7TV emotes found for <b>"${escapeHtml(addEmoteCommand.query)}"</b>.`,
+          },
+          true
+        );
         return;
       }
 
@@ -125,11 +272,19 @@ async function main() {
         webpUrl: sevenTv.getBestWebpUrl(emote),
       }));
 
-      selectionManager.startEmoteSelection(userId, roomId, addEmoteCommand.query, emoteCandidates);
+      selectionManager.startEmoteSelection(
+        userId,
+        roomId,
+        event.event_id,
+        addEmoteCommand.query,
+        emoteCandidates
+      );
       await sendSearchResultsWithPreviews(
         client,
         mediaUploadService,
         roomId,
+        event.event_id,
+        userId,
         addEmoteCommand.query,
         emoteCandidates
       );
@@ -142,9 +297,13 @@ async function main() {
       return;
     }
 
+    if (!threadRootEventId || threadRootEventId !== session.threadRootEventId) {
+      return;
+    }
+
     if (trimmed.toLowerCase() === "cancel") {
       selectionManager.clearSession(userId, roomId);
-      await client.sendText(roomId, "Selection cancelled.");
+      await sendThreadText(client, roomId, session.threadRootEventId, userId, textMessage("Selection cancelled."), true);
       return;
     }
 
@@ -155,9 +314,12 @@ async function main() {
         selectedIndex < 1 ||
         selectedIndex > session.emoteCandidates.length
       ) {
-        await client.sendText(
+        await sendThreadText(
+          client,
           roomId,
-          `Please reply with a number between 1 and ${session.emoteCandidates.length}, or "cancel".`
+          session.threadRootEventId,
+          userId,
+          textMessage(`Please reply with a number between 1 and ${session.emoteCandidates.length}, or "cancel".`)
         );
         return;
       }
@@ -182,13 +344,25 @@ async function main() {
 
       const selectedOptionNumber = Number(trimmed);
       if (!Number.isInteger(selectedOptionNumber)) {
-        await client.sendText(roomId, 'Please reply with a number from the pack list, or "cancel".');
+        await sendThreadText(
+          client,
+          roomId,
+          session.threadRootEventId,
+          userId,
+          textMessage('Please reply with a number from the pack list, or "cancel".')
+        );
         return;
       }
 
       const selectedOption = options.find((option) => option.number === selectedOptionNumber);
       if (!selectedOption) {
-        await client.sendText(roomId, 'Please reply with a number from the pack list, or "cancel".');
+        await sendThreadText(
+          client,
+          roomId,
+          session.threadRootEventId,
+          userId,
+          textMessage('Please reply with a number from the pack list, or "cancel".')
+        );
         return;
       }
 
@@ -202,16 +376,28 @@ async function main() {
           newPackRoomDisplayName: selectedOption.action.roomDisplayName,
         });
 
-        await client.sendText(
+        await sendThreadText(
+          client,
           roomId,
-          `Name for the new ${selectedOption.action.scope} pack in ${selectedOption.action.roomDisplayName}?`
+          session.threadRootEventId,
+          userId,
+          {
+            plain: `Name for the new ${selectedOption.action.scope} pack in ${selectedOption.action.roomDisplayName}?`,
+            html: `Name for the new <b>${escapeHtml(selectedOption.action.scope)}</b> pack in <b>${escapeHtml(selectedOption.action.roomDisplayName)}</b>?`,
+          }
         );
         return;
       }
 
       const selectedPack = existingChoices[selectedOption.action.packChoiceIndex];
       if (!selectedPack) {
-        await client.sendText(roomId, "Selected pack is no longer available. Please choose again.");
+        await sendThreadText(
+          client,
+          roomId,
+          session.threadRootEventId,
+          userId,
+          textMessage("Selected pack is no longer available. Please choose again.")
+        );
         await promptForPackSelection(client, selectionManager, emotePackService, botUserId, userId, roomId);
         return;
       }
@@ -227,12 +413,21 @@ async function main() {
 
       const selectedIndex = session.selectedEmoteIndex ?? 0;
       const selectedEmoteName = session.emoteCandidates[selectedIndex]?.name || "unknown";
-      await client.sendText(
+      await sendThreadText(
+        client,
         roomId,
-        [
-          `Pack: ${selectedPack.displayName} (${selectedPack.scope === "space" ? "space" : "room"})`,
-          `Name for emote (default: ${selectedEmoteName}). Reply with a name or "ok" to use default.`,
-        ].join("\n")
+        session.threadRootEventId,
+        userId,
+        {
+          plain: [
+            `Pack: ${selectedPack.displayName} (${selectedPack.scope === "space" ? "space" : "room"})`,
+            `Name for emote (default: ${selectedEmoteName}). Reply with a name or "ok" to use default.`,
+          ].join("\n"),
+          html: [
+            `<b>Pack:</b> ${escapeHtml(selectedPack.displayName)} <i>(${selectedPack.scope === "space" ? "space" : "room"})</i>`,
+            `Name for emote (default: <b>${escapeHtml(selectedEmoteName)}</b>). Reply with a name or <code>ok</code> to use default.`,
+          ].join("<br>"),
+        }
       );
       return;
     }
@@ -240,12 +435,24 @@ async function main() {
     if (session.step === "confirm_pack_name") {
       const rawName = trimmed;
       if (!rawName) {
-        await client.sendText(roomId, "Pack name cannot be empty. Reply with a valid pack name or cancel.");
+        await sendThreadText(
+          client,
+          roomId,
+          session.threadRootEventId,
+          userId,
+          textMessage("Pack name cannot be empty. Reply with a valid pack name or cancel.")
+        );
         return;
       }
 
       if (Buffer.byteLength(rawName, "utf8") > 80) {
-        await client.sendText(roomId, "Pack name is too long. Please keep it under 80 bytes.");
+        await sendThreadText(
+          client,
+          roomId,
+          session.threadRootEventId,
+          userId,
+          textMessage("Pack name is too long. Please keep it under 80 bytes.")
+        );
         return;
       }
 
@@ -254,7 +461,13 @@ async function main() {
       const newPackRoomDisplayName = session.newPackRoomDisplayName;
       if (!newPackRoomId || !newPackScope || !newPackRoomDisplayName) {
         selectionManager.clearSession(userId, roomId);
-        await client.sendText(roomId, "Selection expired or invalid. Please run /add-emote again.");
+        await sendThreadText(
+          client,
+          roomId,
+          session.threadRootEventId,
+          userId,
+          textMessage("Selection expired or invalid. Please run /add-emote again.")
+        );
         return;
       }
 
@@ -282,12 +495,21 @@ async function main() {
 
       const selectedIndex = session.selectedEmoteIndex ?? 0;
       const selectedEmoteName = session.emoteCandidates[selectedIndex]?.name || "unknown";
-      await client.sendText(
+      await sendThreadText(
+        client,
         roomId,
-        [
-          `Created pack target: ${rawName} (${newPackScope})`,
-          `Name for emote (default: ${selectedEmoteName}). Reply with a name or "ok" to use default.`,
-        ].join("\n")
+        session.threadRootEventId,
+        userId,
+        {
+          plain: [
+            `Created pack target: ${rawName} (${newPackScope})`,
+            `Name for emote (default: ${selectedEmoteName}). Reply with a name or "ok" to use default.`,
+          ].join("\n"),
+          html: [
+            `Created pack target: <b>${escapeHtml(rawName)}</b> <i>(${escapeHtml(newPackScope)})</i>`,
+            `Name for emote (default: <b>${escapeHtml(selectedEmoteName)}</b>). Reply with a name or <code>ok</code> to use default.`,
+          ].join("<br>"),
+        }
       );
       return;
     }
@@ -299,21 +521,36 @@ async function main() {
       const finalName = trimmed.toLowerCase() === "ok" ? defaultName : trimmed;
 
       if (!finalName) {
-        await client.sendText(roomId, "Name cannot be empty. Reply with a valid name or \"ok\".");
+        await sendThreadText(
+          client,
+          roomId,
+          session.threadRootEventId,
+          userId,
+          textMessage("Name cannot be empty. Reply with a valid name or \"ok\".")
+        );
         return;
       }
 
       if (!isValidEmoteName(finalName)) {
-        await client.sendText(
+        await sendThreadText(
+          client,
           roomId,
-          "Invalid emote name. Use only letters, numbers, '-' or '_', max 100 bytes."
+          session.threadRootEventId,
+          userId,
+          textMessage("Invalid emote name. Use only letters, numbers, '-' or '_', max 100 bytes.")
         );
         return;
       }
 
       if (!selectedEmote) {
         selectionManager.clearSession(userId, roomId);
-        await client.sendText(roomId, "Selection expired or invalid. Please run /add-emote again.");
+        await sendThreadText(
+          client,
+          roomId,
+          session.threadRootEventId,
+          userId,
+          textMessage("Selection expired or invalid. Please run /add-emote again.")
+        );
         return;
       }
 
@@ -322,7 +559,13 @@ async function main() {
       const selectedPack = packChoices[selectedPackIndex];
       if (!selectedPack) {
         selectionManager.clearSession(userId, roomId);
-        await client.sendText(roomId, "Pack selection expired. Please run /add-emote again.");
+        await sendThreadText(
+          client,
+          roomId,
+          session.threadRootEventId,
+          userId,
+          textMessage("Pack selection expired. Please run /add-emote again.")
+        );
         return;
       }
 
@@ -332,9 +575,12 @@ async function main() {
         selectedPack.stateKey
       );
       if (shortcodeExists) {
-        await client.sendText(
+        await sendThreadText(
+          client,
           roomId,
-          `:${finalName}: already exists in ${selectedPack.displayName}. Reply with a different name or "cancel".`
+          session.threadRootEventId,
+          userId,
+          textMessage(`:${finalName}: already exists in ${selectedPack.displayName}. Reply with a different name or "cancel".`)
         );
         return;
       }
@@ -363,16 +609,40 @@ async function main() {
         );
 
         if (selectedPack.scope === "space") {
-          await client.sendText(
+          await sendThreadText(
+            client,
             roomId,
-            `Added :${finalName}: to space pack "${selectedPack.displayName}" in ${selectedPack.roomDisplayName}.`
+            session.threadRootEventId,
+            userId,
+            {
+              plain: `Added :${finalName}: to space pack "${selectedPack.displayName}" in ${selectedPack.roomDisplayName}.`,
+              html: `Added <b>:${escapeHtml(finalName)}:</b> to space pack <b>"${escapeHtml(selectedPack.displayName)}"</b> in <b>${escapeHtml(selectedPack.roomDisplayName)}</b>.`,
+            },
+            true
           );
         } else {
-          await client.sendText(roomId, `Added :${finalName}: to room pack "${selectedPack.displayName}".`);
+          await sendThreadText(
+            client,
+            roomId,
+            session.threadRootEventId,
+            userId,
+            {
+              plain: `Added :${finalName}: to room pack "${selectedPack.displayName}".`,
+              html: `Added <b>:${escapeHtml(finalName)}:</b> to room pack <b>"${escapeHtml(selectedPack.displayName)}"</b>.`,
+            },
+            true
+          );
         }
       } catch (error) {
         LogService.error("add-emote", "Failed to upload/add emote", error);
-        await client.sendText(roomId, getAddEmoteErrorMessage(error));
+        await sendThreadText(
+          client,
+          roomId,
+          session.threadRootEventId,
+          userId,
+          textMessage(getAddEmoteErrorMessage(error)),
+          true
+        );
       }
 
       selectionManager.clearSession(userId, roomId);
@@ -388,60 +658,94 @@ async function sendSearchResultsWithPreviews(
   client: BotClient,
   mediaUploadService: MediaUploadService,
   roomId: string,
+  threadRootEventId: string,
+  userId: string,
   query: string,
   emoteCandidates: Array<{ id: string; name: string; animated: boolean; webpUrl: string }>
 ): Promise<void> {
-  await client.sendText(
+  await sendThreadText(
+    client,
     roomId,
-    [`Found ${emoteCandidates.length} emotes for "${query}":`, "Sending previews..."].join("\n")
+    threadRootEventId,
+    userId,
+    {
+      plain: `Found ${emoteCandidates.length} emotes for "${query}". Sending previews...`,
+      html: `Found <b>${emoteCandidates.length}</b> emotes for <b>"${escapeHtml(query)}"</b>. Sending previews...`,
+    },
+    true
   );
 
   for (const [idx, emote] of emoteCandidates.entries()) {
     try {
       const previewMxc = await mediaUploadService.uploadFromUrl(emote.webpUrl);
-      await client.sendMessage(roomId, {
-        msgtype: "m.image",
-        body: `${idx + 1}. ${emote.name}${emote.animated ? " (animated)" : ""}`,
-        url: previewMxc,
-        info: {
-          mimetype: "image/webp",
-        },
-      });
+      await sendThreadImage(
+        client,
+        roomId,
+        threadRootEventId,
+        `${idx + 1}. ${emote.name}${emote.animated ? " (animated)" : ""}`,
+        previewMxc
+      );
     } catch (error) {
       LogService.warn("add-emote", `Preview upload failed for ${emote.id}`, error as Error);
-      await client.sendText(
+      await sendThreadText(
+        client,
         roomId,
-        `${idx + 1}. ${emote.name}${emote.animated ? " (animated)" : ""} - ${emote.webpUrl}`
+        threadRootEventId,
+        userId,
+        textMessage(`${idx + 1}. ${emote.name}${emote.animated ? " (animated)" : ""} - ${emote.webpUrl}`)
       );
     }
   }
 
-  await client.sendText(roomId, 'Reply with a number to select, or "cancel".');
+  await sendThreadText(
+    client,
+    roomId,
+    threadRootEventId,
+    userId,
+    {
+      plain: 'Reply with a number to select, or "cancel".',
+      html: 'Reply with a number to select, or <code>cancel</code>.',
+    }
+  );
 }
 
 async function sendDirectSelectionPreview(
   client: BotClient,
   mediaUploadService: MediaUploadService,
   roomId: string,
+  threadRootEventId: string,
+  userId: string,
   selectedEmote: { id: string; name: string; animated: boolean; webpUrl: string }
 ): Promise<void> {
-  await client.sendText(roomId, `Selected by link: ${selectedEmote.name}. Sending preview...`);
+  await sendThreadText(
+    client,
+    roomId,
+    threadRootEventId,
+    userId,
+    {
+      plain: `Selected by link: ${selectedEmote.name}. Sending preview...`,
+      html: `Selected by link: <b>${escapeHtml(selectedEmote.name)}</b>. Sending preview...`,
+    },
+    true
+  );
 
   try {
     const previewMxc = await mediaUploadService.uploadFromUrl(selectedEmote.webpUrl);
-    await client.sendMessage(roomId, {
-      msgtype: "m.image",
-      body: `${selectedEmote.name}${selectedEmote.animated ? " (animated)" : ""}`,
-      url: previewMxc,
-      info: {
-        mimetype: "image/webp",
-      },
-    });
+    await sendThreadImage(
+      client,
+      roomId,
+      threadRootEventId,
+      `${selectedEmote.name}${selectedEmote.animated ? " (animated)" : ""}`,
+      previewMxc
+    );
   } catch (error) {
     LogService.warn("add-emote", `Preview upload failed for ${selectedEmote.id}`, error as Error);
-    await client.sendText(
+    await sendThreadText(
+      client,
       roomId,
-      `${selectedEmote.name}${selectedEmote.animated ? " (animated)" : ""} - ${selectedEmote.webpUrl}`
+      threadRootEventId,
+      userId,
+      textMessage(`${selectedEmote.name}${selectedEmote.animated ? " (animated)" : ""} - ${selectedEmote.webpUrl}`)
     );
   }
 }
@@ -523,9 +827,13 @@ function formatPackSelectionMessage(
   selectedEmoteName: string,
   packChoices: PackChoice[],
   options: PackSelectionOption[]
-): string {
-  const lines: string[] = [
+): FormattedMessage {
+  const plainLines: string[] = [
     `Selected: ${selectedEmoteName}`,
+    "Add to which pack?",
+  ];
+  const htmlLines: string[] = [
+    `Selected: <b>${escapeHtml(selectedEmoteName)}</b>`,
     "Add to which pack?",
   ];
 
@@ -535,7 +843,10 @@ function formatPackSelectionMessage(
       if (pack) {
         const scopeLabel = pack.scope === "space" ? `space: ${pack.roomDisplayName}` : "this room";
         const keyLabel = pack.stateKey ? ` [${pack.stateKey}]` : " [default]";
-        lines.push(`  ${option.number}. ${pack.displayName} (${scopeLabel})${keyLabel}`);
+        plainLines.push(`  ${option.number}. ${pack.displayName} (${scopeLabel})${keyLabel}`);
+        htmlLines.push(
+          `&nbsp;&nbsp;${option.number}. <b>${escapeHtml(pack.displayName)}</b> <i>(${escapeHtml(scopeLabel)})</i>${escapeHtml(keyLabel)}`
+        );
       }
       continue;
     }
@@ -543,11 +854,16 @@ function formatPackSelectionMessage(
     const targetLabel = option.action.scope === "space"
       ? `Create new pack in space ${option.action.roomDisplayName}`
       : "Create new pack in this room";
-    lines.push(`  ${option.number}. ${targetLabel}`);
+    plainLines.push(`  ${option.number}. ${targetLabel}`);
+    htmlLines.push(`&nbsp;&nbsp;${option.number}. ${escapeHtml(targetLabel)}`);
   }
 
-  lines.push('Reply with a number, or "cancel".');
-  return lines.join("\n");
+  plainLines.push('Reply with a number, or "cancel".');
+  htmlLines.push('Reply with a number, or <code>cancel</code>.');
+  return {
+    plain: plainLines.join("\n"),
+    html: htmlLines.join("<br>"),
+  };
 }
 
 async function promptForPackSelection(
@@ -576,9 +892,15 @@ async function promptForPackSelection(
 
   if (options.length === 0) {
     selectionManager.clearSession(userId, roomId);
-    await client.sendText(
+    await sendThreadText(
+      client,
       roomId,
-      "I cannot edit room or canonical-space emote packs from here. Ask an admin to grant me state-event rights for im.ponies.room_emotes."
+      session.threadRootEventId,
+      userId,
+      textMessage(
+        "I cannot edit room or canonical-space emote packs from here. Ask an admin to grant me state-event rights for im.ponies.room_emotes."
+      ),
+      true
     );
     return;
   }
@@ -592,7 +914,13 @@ async function promptForPackSelection(
     newPackRoomDisplayName: undefined,
   });
 
-  await client.sendText(roomId, formatPackSelectionMessage(selectedEmoteName, packChoices, options));
+  await sendThreadText(
+    client,
+    roomId,
+    session.threadRootEventId,
+    userId,
+    formatPackSelectionMessage(selectedEmoteName, packChoices, options)
+  );
 }
 
 function generateUniqueStateKey(displayName: string, used: Set<string>): string {

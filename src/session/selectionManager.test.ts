@@ -10,20 +10,21 @@ function sleep(ms: number): Promise<void> {
 describe("SelectionManager", () => {
   it("starts and gets a session", () => {
     const manager = new SelectionManager(1000);
-    manager.startEmoteSelection("@alice:example.com", "!room:example.com", "pepe", [
+    manager.startEmoteSelection("@alice:example.com", "!room:example.com", "$event:example.com", "pepe", [
       { id: "1", name: "Pepega", animated: false, webpUrl: "https://cdn.7tv.app/emote/1/4x.webp" },
     ]);
 
     const session = manager.getSession("@alice:example.com", "!room:example.com");
     expect(session).not.toBeNull();
     expect(session?.query).toBe("pepe");
+    expect(session?.threadRootEventId).toBe("$event:example.com");
     expect(session?.step).toBe("pick_emote");
     expect(session?.emoteCandidates).toHaveLength(1);
   });
 
   it("updates session and advances step", () => {
     const manager = new SelectionManager(1000);
-    manager.startEmoteSelection("@alice:example.com", "!room:example.com", "pepe", [
+    manager.startEmoteSelection("@alice:example.com", "!room:example.com", "$event:example.com", "pepe", [
       { id: "1", name: "Pepega", animated: false, webpUrl: "https://cdn.7tv.app/emote/1/4x.webp" },
     ]);
 
@@ -39,7 +40,7 @@ describe("SelectionManager", () => {
 
   it("clears session", () => {
     const manager = new SelectionManager(1000);
-    manager.startEmoteSelection("@alice:example.com", "!room:example.com", "pepe", [
+    manager.startEmoteSelection("@alice:example.com", "!room:example.com", "$event:example.com", "pepe", [
       { id: "1", name: "Pepega", animated: false, webpUrl: "https://cdn.7tv.app/emote/1/4x.webp" },
     ]);
 
@@ -49,7 +50,7 @@ describe("SelectionManager", () => {
 
   it("expires sessions and removes them", async () => {
     const manager = new SelectionManager(20);
-    manager.startEmoteSelection("@alice:example.com", "!room:example.com", "pepe", [
+    manager.startEmoteSelection("@alice:example.com", "!room:example.com", "$event:example.com", "pepe", [
       { id: "1", name: "Pepega", animated: false, webpUrl: "https://cdn.7tv.app/emote/1/4x.webp" },
     ]);
 
@@ -60,10 +61,10 @@ describe("SelectionManager", () => {
 
   it("cleanupExpiredSessions returns removed count", async () => {
     const manager = new SelectionManager(20);
-    manager.startEmoteSelection("@alice:example.com", "!room:example.com", "pepe", [
+    manager.startEmoteSelection("@alice:example.com", "!room:example.com", "$event:example.com", "pepe", [
       { id: "1", name: "Pepega", animated: false, webpUrl: "https://cdn.7tv.app/emote/1/4x.webp" },
     ]);
-    manager.startEmoteSelection("@bob:example.com", "!room:example.com", "kekw", [
+    manager.startEmoteSelection("@bob:example.com", "!room:example.com", "$event2:example.com", "kekw", [
       { id: "2", name: "KEKW", animated: true, webpUrl: "https://cdn.7tv.app/emote/2/4x.webp" },
     ]);
 
@@ -77,6 +78,7 @@ describe("SelectionManager", () => {
     manager.startEmoteSelection(
       "@alice:example.com",
       "!room:example.com",
+      "$event:example.com",
       "link",
       [{ id: "1", name: "Pepega", animated: false, webpUrl: "https://cdn.7tv.app/emote/1/4x.webp" }],
       { preselectedEmoteIndex: 0 }

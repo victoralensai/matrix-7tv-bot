@@ -20,6 +20,7 @@ export interface EmoteCandidate {
 export interface EmoteSelectionSession {
   userId: string;
   roomId: string;
+  threadRootEventId: string;
   step: SelectionStep;
   query: string;
   emoteCandidates: EmoteCandidate[];
@@ -42,6 +43,7 @@ export class SelectionManager {
   public startEmoteSelection(
     userId: string,
     roomId: string,
+    threadRootEventId: string,
     query: string,
     emoteCandidates: EmoteCandidate[],
     options?: {
@@ -56,6 +58,7 @@ export class SelectionManager {
     const session: EmoteSelectionSession = {
       userId,
       roomId,
+      threadRootEventId,
       step: hasPreselected ? "pick_pack" : "pick_emote",
       query,
       emoteCandidates,
