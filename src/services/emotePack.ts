@@ -20,8 +20,29 @@ export interface EmotePackContent {
   };
 }
 
+export interface RoomPackDescriptor {
+  roomId: string;
+  roomDisplayName: string;
+  stateKey: string;
+  displayName: string;
+}
+
 const ROOM_EMOTES_EVENT = "im.ponies.room_emotes";
-const USER_EMOTES_EVENT = "im.ponies.user_emotes";
+const ROOM_PARENT_EVENT = "m.room.parent";
+
+interface RoomStateEvent {
+  type?: string;
+  state_key?: string;
+  content?: unknown;
+}
+
+interface RoomNameState {
+  name?: string;
+}
+
+interface ParentStateContent {
+  canonical?: boolean;
+}
 
 export class EmotePackService {
   public constructor(private readonly client: MatrixClient) {}
@@ -30,69 +51,163 @@ export class EmotePackService {
     return this.client.userHasPowerLevelFor(userId, roomId, ROOM_EMOTES_EVENT, true);
   }
 
+  public async getEditablePackTargets(
+    userId: string,
+    roomId: string
+  ): Promise<{ roomPacks: RoomPackDescriptor[]; spacePacks: RoomPackDescriptor[]; canonicalSpaceId: string | null }> {
+    const roomPacks = await this.listRoomPacks(roomId);
+    const canonicalSpaceId = await this.getCanonicalParentSpaceId(roomId);
+
+    let spacePacks: RoomPackDescriptor[] = [];
+    if (canonicalSpaceId) {
+      const canEditSpace = await this.canUserEditRoomPack(userId, canonicalSpaceId);
+      if (canEditSpace) {
+        spacePacks = await this.listRoomPacks(canonicalSpaceId);
+      }
+    }
+
+    return {
+      roomPacks,
+      spacePacks,
+      canonicalSpaceId,
+    };
+  }
+
+  public async listRoomPacks(roomId: string): Promise<RoomPackDescriptor[]> {
+    const stateEvents = await this.client.getRoomState(roomId);
+    const roomName = await this.getRoomDisplayName(roomId, stateEvents);
+
+    const descriptors = stateEvents
+      .filter((event) => event?.type === ROOM_EMOTES_EVENT)
+      .map((event) => {
+        const stateKey = typeof event.state_key === "string" ? event.state_key : "";
+        const content = this.normalizePackContent(event.content);
+        const displayName = content.pack?.display_name || (stateKey ? `Pack ${stateKey}` : "Default Pack");
+        return {
+          roomId,
+          roomDisplayName: roomName,
+          stateKey,
+          displayName,
+        };
+      });
+
+    if (descriptors.length > 0) {
+      return descriptors.sort((a, b) => {
+        if (a.stateKey === "" && b.stateKey !== "") return -1;
+        if (a.stateKey !== "" && b.stateKey === "") return 1;
+        return a.displayName.localeCompare(b.displayName);
+      });
+    }
+
+    return [
+      {
+        roomId,
+        roomDisplayName: roomName,
+        stateKey: "",
+        displayName: "Default Pack",
+      },
+    ];
+  }
+
+  public async getCanonicalParentSpaceId(roomId: string): Promise<string | null> {
+    const stateEvents = await this.client.getRoomState(roomId);
+    for (const event of stateEvents) {
+      if (event?.type !== ROOM_PARENT_EVENT) {
+        continue;
+      }
+
+      const content = (event.content ?? {}) as ParentStateContent;
+      if (!content.canonical) {
+        continue;
+      }
+
+      const stateKey = typeof event.state_key === "string" ? event.state_key : "";
+      if (!stateKey) {
+        continue;
+      }
+
+      try {
+        const roomState = await this.client.getRoomStateEvent(stateKey, "m.room.create", "");
+        const createType = (roomState ?? {}) as { type?: string };
+        if (createType.type === "m.space") {
+          return stateKey;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return null;
+  }
+
   public async addToRoomPack(
     roomId: string,
     shortcode: string,
     image: EmoteImageEntry,
-    packDisplayName = "Room Emotes"
+    options?: { packDisplayName?: string; stateKey?: string }
   ): Promise<void> {
-    const content = await this.getRoomPack(roomId);
+    const stateKey = options?.stateKey ?? "";
+    const content = await this.getRoomPack(roomId, stateKey);
     content.images[shortcode] = image;
 
     if (!content.pack) {
       content.pack = {
-        display_name: packDisplayName,
+        display_name: options?.packDisplayName ?? "Room Emotes",
         usage: ["emoticon", "sticker"],
       };
     }
 
-    await this.client.sendStateEvent(roomId, ROOM_EMOTES_EVENT, "", content);
+    await this.client.sendStateEvent(roomId, ROOM_EMOTES_EVENT, stateKey, content);
   }
 
-  public async addToPersonalPack(
-    shortcode: string,
-    image: EmoteImageEntry,
-    packDisplayName = "Personal Emotes"
-  ): Promise<void> {
-    const content = await this.getPersonalPack();
-    content.images[shortcode] = image;
-
+  public async createRoomPack(roomId: string, stateKey: string, displayName: string): Promise<void> {
+    const content = await this.getRoomPack(roomId, stateKey);
     if (!content.pack) {
       content.pack = {
-        display_name: packDisplayName,
+        display_name: displayName,
         usage: ["emoticon", "sticker"],
       };
     }
 
-    await this.client.setAccountData(USER_EMOTES_EVENT, content);
+    await this.client.sendStateEvent(roomId, ROOM_EMOTES_EVENT, stateKey, content);
   }
 
-  public async roomPackHasShortcode(roomId: string, shortcode: string): Promise<boolean> {
-    const content = await this.getRoomPack(roomId);
+  public async roomPackHasShortcode(roomId: string, shortcode: string, stateKey = ""): Promise<boolean> {
+    const content = await this.getRoomPack(roomId, stateKey);
     return Object.prototype.hasOwnProperty.call(content.images, shortcode);
   }
 
-  public async personalPackHasShortcode(shortcode: string): Promise<boolean> {
-    const content = await this.getPersonalPack();
-    return Object.prototype.hasOwnProperty.call(content.images, shortcode);
-  }
-
-  private async getRoomPack(roomId: string): Promise<EmotePackContent> {
+  private async getRoomPack(roomId: string, stateKey = ""): Promise<EmotePackContent> {
     try {
-      const existing = await this.client.getRoomStateEvent(roomId, ROOM_EMOTES_EVENT, "");
+      const existing = await this.client.getRoomStateEvent(roomId, ROOM_EMOTES_EVENT, stateKey);
       return this.normalizePackContent(existing);
     } catch {
       return { images: {} };
     }
   }
 
-  private async getPersonalPack(): Promise<EmotePackContent> {
-    try {
-      const existing = await this.client.getAccountData<EmotePackContent>(USER_EMOTES_EVENT);
-      return this.normalizePackContent(existing);
-    } catch {
-      return { images: {} };
+  private async getRoomDisplayName(roomId: string, stateEvents?: RoomStateEvent[]): Promise<string> {
+    const fromCache = (stateEvents ?? []).find(
+      (event) => event?.type === "m.room.name" && event?.state_key === ""
+    );
+    if (fromCache) {
+      const name = ((fromCache.content ?? {}) as RoomNameState).name;
+      if (name && typeof name === "string") {
+        return name;
+      }
     }
+
+    try {
+      const existing = await this.client.getRoomStateEvent(roomId, "m.room.name", "");
+      const name = ((existing ?? {}) as RoomNameState).name;
+      if (name && typeof name === "string") {
+        return name;
+      }
+    } catch {
+      return roomId;
+    }
+
+    return roomId;
   }
 
   private normalizePackContent(value: unknown): EmotePackContent {

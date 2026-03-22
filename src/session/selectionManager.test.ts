@@ -71,4 +71,19 @@ describe("SelectionManager", () => {
 
     expect(manager.cleanupExpiredSessions()).toBe(2);
   });
+
+  it("can start directly at pick_pack with preselected emote", () => {
+    const manager = new SelectionManager(1000);
+    manager.startEmoteSelection(
+      "@alice:example.com",
+      "!room:example.com",
+      "link",
+      [{ id: "1", name: "Pepega", animated: false, webpUrl: "https://cdn.7tv.app/emote/1/4x.webp" }],
+      { preselectedEmoteIndex: 0 }
+    );
+
+    const session = manager.getSession("@alice:example.com", "!room:example.com");
+    expect(session?.step).toBe("pick_pack");
+    expect(session?.selectedEmoteIndex).toBe(0);
+  });
 });

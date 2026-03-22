@@ -1,4 +1,14 @@
-export type SelectionStep = "pick_emote" | "pick_pack" | "confirm_name";
+export type SelectionStep = "pick_emote" | "pick_pack" | "confirm_pack_name" | "confirm_name";
+
+export type PackScope = "room" | "space";
+
+export interface PackChoice {
+  scope: PackScope;
+  roomId: string;
+  roomDisplayName: string;
+  stateKey: string;
+  displayName: string;
+}
 
 export interface EmoteCandidate {
   id: string;
@@ -14,7 +24,11 @@ export interface EmoteSelectionSession {
   query: string;
   emoteCandidates: EmoteCandidate[];
   selectedEmoteIndex?: number;
-  packTarget?: "room" | "personal";
+  packChoices?: PackChoice[];
+  selectedPackChoiceIndex?: number;
+  newPackScope?: PackScope;
+  newPackRoomId?: string;
+  newPackRoomDisplayName?: string;
   customName?: string;
   createdAtMs: number;
   expiresAtMs: number;
@@ -29,15 +43,23 @@ export class SelectionManager {
     userId: string,
     roomId: string,
     query: string,
-    emoteCandidates: EmoteCandidate[]
+    emoteCandidates: EmoteCandidate[],
+    options?: {
+      preselectedEmoteIndex?: number;
+    }
   ): EmoteSelectionSession {
     const now = Date.now();
+    const hasPreselected =
+      typeof options?.preselectedEmoteIndex === "number" &&
+      options.preselectedEmoteIndex >= 0 &&
+      options.preselectedEmoteIndex < emoteCandidates.length;
     const session: EmoteSelectionSession = {
       userId,
       roomId,
-      step: "pick_emote",
+      step: hasPreselected ? "pick_pack" : "pick_emote",
       query,
       emoteCandidates,
+      selectedEmoteIndex: hasPreselected ? options?.preselectedEmoteIndex : undefined,
       createdAtMs: now,
       expiresAtMs: now + this.timeoutMs,
     };
