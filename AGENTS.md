@@ -6,9 +6,11 @@ A Matrix bot that allows users to search and add 7TV emotes to Matrix emote/stic
 
 **Key Features:**
 - `/add-emote <search>` command to search 7TV
+- `/add-emote-by-link <7tv link or ID>` for direct emote add
 - Reply-based selection UI with preview images
-- Support for both room emote packs and personal emote packs
-- Permission checking for room packs
+- Support for room emote packs and canonical parent space packs
+- Permission checking for room/space packs
+- Threaded bot flow with HTML-formatted replies and mentions
 - Animated emote support (WebP)
 - Docker deployment
 
@@ -28,6 +30,7 @@ matrix-7tv-bot/
 │   ├── bot.ts                # Matrix bot setup
 │   ├── commands/
 │   │   ├── addEmote.ts       # /add-emote handler
+│   │   ├── addEmoteByLink.ts # /add-emote-by-link handler
 │   │   └── help.ts           # /help handler
 │   ├── services/
 │   │   ├── sevenTv.ts        # 7TV API client
@@ -80,7 +83,7 @@ matrix-7tv-bot/
 |------|--------|-------|
 | 4.1 Check user permissions for room emote packs | [x] | Done - `userHasPowerLevelFor(..., im.ponies.room_emotes, true)` check before room target |
 | 4.2 Implement room emote pack state event updates | [x] | Done - `EmotePackService.addToRoomPack()` updates `im.ponies.room_emotes` state key `""` |
-| 4.3 Implement personal/account emote pack updates | [x] | Done - `EmotePackService.addToPersonalPack()` updates account data `im.ponies.user_emotes` |
+| 4.3 Implement room/space pack targeting | [x] | Done - discovers editable room packs + canonical parent space packs |
 | 4.4 Handle emote naming (default from 7TV, allow override) | [x] | Done - default name + custom override + validation (`[a-zA-Z0-9-_]+`, <=100 bytes) |
 
 ### Phase 5: User Flow Implementation
@@ -89,7 +92,7 @@ matrix-7tv-bot/
 |------|--------|-------|
 | 5.1 `/add-emote <search>` - search and show results | [x] | Done - live 7TV search integrated |
 | 5.2 Show numbered list with emote preview images | [x] | Done - bot sends `m.image` preview events for each result and falls back to URL text if preview upload fails |
-| 5.3 Ask "room pack or personal pack?" | [x] | Done - includes room permission rejection path |
+| 5.3 Ask for pack target (room/space/create) | [x] | Done - list existing packs and optional create-new targets |
 | 5.4 Ask for name confirmation/override | [x] | Done - `ok` keeps default, any valid shortcode overrides |
 | 5.5 Upload to Matrix media, add to pack, confirm success | [x] | Done - download WebP, upload MXC, write to selected pack |
 
@@ -120,7 +123,11 @@ Bot:   Found 5 emotes for "pepe":
 User:  2
 
 Bot:   Selected: Pepega
-       Add to: [1] This room's pack  [2] Your personal pack
+       Add to which pack?
+       1. Default Pack (this room) [default]
+       2. Space Pack (space: My Space) [default]
+       3. Create new pack in this room
+       4. Create new pack in space My Space
 
 User:  1
 
@@ -150,9 +157,9 @@ Bot:   ✓ Added :Pepega: to this room's emote pack!
   - State key can be empty string for default pack, or a pack name
   - Format: `{ "images": { "emote_name": { "url": "mxc://..." } }, "pack": { "display_name": "Pack Name" } }`
 
-- **Personal emotes**: Account data `im.ponies.user_emotes`
-  - Similar format to room emotes
-  - Stored in user's account data, not room state
+- **Space emote packs**: Also use `im.ponies.room_emotes`, written in canonical parent space room
+  - Canonical parent discovery uses `m.space.parent` with `canonical: true`
+  - Space room is validated as `m.space` via `m.room.create`
 
 ### Matrix Media Upload
 
@@ -174,6 +181,7 @@ Bot:   ✓ Added :Pepega: to this room's emote pack!
 | 2026-03-22 | Duplicate shortcode collisions and opaque add failures | Added pack duplicate-name checks before upload and more specific user-facing error messages |
 | 2026-03-22 | Docker image depended on prebuilt `dist/` artifacts | Switched to a multi-stage Dockerfile that builds TypeScript during image build and ships production-only deps |
 | 2026-03-22 | Need automated quality checks and release image publishing | Added GitHub Actions CI (`test` + `build`) and GHCR publish workflow on version tags |
+| 2026-03-22 | Pre-v1 docs were outdated after threading/space-pack/link flow changes | Rewrote `README.md` and updated project plan notes for v1 behavior |
 
 ---
 
