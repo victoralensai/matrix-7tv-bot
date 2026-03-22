@@ -47,11 +47,12 @@ export class SevenTvService {
     const fetchLimit = Math.max(limit, limit + 10);
     const requestBody = {
       query:
-        "query SearchEmotes($query: String!, $limit: Int!, $sort: Sort) { emotes(query: $query, limit: $limit, sort: $sort) { items { id name animated host { url files { name format } } } } }",
+        "query SearchEmotes($query: String!, $limit: Int!, $sort: Sort, $filter: EmoteSearchFilter) { emotes(query: $query, limit: $limit, sort: $sort, filter: $filter) { items { id name animated host { url files { name format } } } } }",
       variables: {
         query: trimmedQuery,
         limit: fetchLimit,
-        sort: { value: "TOP", order: "DESCENDING" },
+        sort: { value: "popularity", order: "DESCENDING" },
+        filter: { category: "TOP" },
       },
     };
 
